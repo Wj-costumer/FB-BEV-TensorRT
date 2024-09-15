@@ -192,6 +192,7 @@ class OccHead(BaseModule):
 
         res = {
             'output_voxels': output['occ'],
+            'out_voxel_feats': out_voxel_feats,
             'output_voxels_fine': output.get('fine_output', None),
             'output_coords_fine': output.get('fine_coord', None),
         }
@@ -207,7 +208,7 @@ class OccHead(BaseModule):
             output_coords_fine=res['output_coords_fine'],
             output_voxels_fine=res['output_voxels_fine'])
 
-        return loss
+        return loss, res
 
 
     @force_fp32() 

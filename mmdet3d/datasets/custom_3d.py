@@ -100,7 +100,7 @@ class Custom3DDataset(Dataset):
                 'might cause errors if the path is not a local path. '
                 'Please use MMCV>= 1.3.16 if you meet errors.')
             self.data_infos = self.load_annotations(self.ann_file)
-
+        breakpoint()
         # process pipeline
         if pipeline is not None:
             self.pipeline = Compose(pipeline)

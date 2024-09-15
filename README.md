@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Forward-Backward View Transformation for Vision-Centric AV Perception
 
 <p align="center">
@@ -62,3 +63,6 @@ If this work is helpful for your research, please consider citing:
 Many thanks to these excellent open source projects:
 
 - [BEVFormer](https://github.com/fundamentalvision/BEVFormer), [BEVDet](https://github.com/HuangJunJie2017/BEVDet), [Occ3D](https://github.com/Tsinghua-MARS-Lab/Occ3D), [OpenOccupancy](https://github.com/JeffWang987/OpenOccupancy), [SoloFusion](https://github.com/Divadi/SOLOFusion)
+=======
+# FB-BEV-TRT
+>>>>>>> a2921a53bc71464f26d281eb8106ce231661b17a

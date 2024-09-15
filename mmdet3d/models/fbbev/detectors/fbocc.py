@@ -30,7 +30,7 @@ from mmdet.core import reduce_mean
 import mmcv
 from mmdet3d.datasets.utils import nuscenes_get_rt_matrix
 from mmdet3d.core.bbox import box_np_ops # , corner_to_surfaces_3d, points_in_convex_polygon_3d_jit
-
+from mmdet3d.core import bbox3d2result
 
 
 def generate_forward_transformation_matrix(bda, img_meta_dict=None):
@@ -57,6 +57,8 @@ class FBOCC(CenterPoint):
                  depth_net=None,
                  # occupancy head
                  occupancy_head=None,
+                 # bevdet head
+                 bevdet_head=None,
                  # other settings.
                  use_depth_supervision=False,
                  readd=False,
@@ -67,7 +69,7 @@ class FBOCC(CenterPoint):
                  history_cat_num=16,
                  history_cat_conv_out_channels=None,
                  single_bev_num_channels=80,
-
+                 with_pts_bbox=False,
                   **kwargs):
         super(FBOCC, self).__init__(**kwargs)
         self.fix_void = fix_void
@@ -99,7 +101,7 @@ class FBOCC(CenterPoint):
 
         # Deal with history
         self.single_bev_num_channels = single_bev_num_channels
-        self.do_history = do_history
+        self.do_history = do_history # whether fuse history bev feature
         self.interpolation_mode = interpolation_mode
         self.history_cat_num = history_cat_num
         self.history_cam_sweep_freq = 0.5 # seconds between each frame
@@ -131,7 +133,8 @@ class FBOCC(CenterPoint):
         self.history_seq_ids = None
         self.history_forward_augs = None
         self.count = 0
-
+        self.bevdet_head = builder.build_head(bevdet_head) if with_pts_bbox else None
+        
     def with_specific_component(self, component_name):
         """Whether the model owns a specific component"""
         return getattr(self, component_name, None) is not None
@@ -317,11 +320,11 @@ class FBOCC(CenterPoint):
 
         return_map = {}
 
-        context = self.image_encoder(img[0])
+        context = self.image_encoder(img[0]) # torch.Size([1, 6, 256, 16, 44])
         cam_params = img[1:7]
         if self.with_specific_component('depth_net'):
-            mlp_input = self.depth_net.get_mlp_input(*cam_params)
-            context, depth = self.depth_net(context, mlp_input)
+            mlp_input = self.depth_net.get_mlp_input(*cam_params) # torch.Size([1, 6, 27])
+            context, depth = self.depth_net(context, mlp_input) # torch.Size([1, 6, 80, 16, 44]), torch.Size([1, 6, 80, 16, 44])
             return_map['depth'] = depth
             return_map['context'] = context
         else:
@@ -329,7 +332,7 @@ class FBOCC(CenterPoint):
             depth=None
         
         if self.with_specific_component('forward_projection'):
-            bev_feat = self.forward_projection(cam_params, context, depth, **kwargs)
+            bev_feat = self.forward_projection(cam_params, context, depth, **kwargs) # torch.Size([1, 80, 100, 100, 8])
             return_map['cam_params'] = cam_params
         else:
             bev_feat = None
@@ -353,17 +356,17 @@ class FBOCC(CenterPoint):
                                         cam_params=cam_params,
                                         bev_mask=bev_mask,
                                         gt_bboxes_3d=None, # debug
-                                        pred_img_depth=depth)  
+                                        pred_img_depth=depth)  # torch.Size([1, 80, 100, 100])
                                         
             if self.readd:
-                bev_feat = bev_feat_refined[..., None] + bev_feat
+                bev_feat = bev_feat_refined[..., None] + bev_feat # torch.Size([1, 80, 100, 100, 8])
             else:
                 bev_feat = bev_feat_refined
 
         # Fuse History
-        bev_feat = self.fuse_history(bev_feat, img_metas, img[6])
+        bev_feat = self.fuse_history(bev_feat, img_metas, img[6]) # torch.Size([1, 80, 100, 100, 8])
         
-        bev_feat = self.bev_encoder(bev_feat)
+        bev_feat = self.bev_encoder(bev_feat) # [torch.Size([1, 256, 100, 100, 8]), torch.Size([1, 256, 50, 50, 4]), torch.Size([1, 256, 25, 25, 2])]
         return_map['img_bev_feat'] = bev_feat
 
         return return_map
@@ -384,6 +387,7 @@ class FBOCC(CenterPoint):
         results={}
         if img is not None and self.with_specific_component('image_encoder'):
             results.update(self.extract_img_bev_feat(img, img_metas, **kwargs))
+        # use lidar points supervise training period, no use for testing
         if points is not None and self.with_specific_component('pts_voxel_encoder'):
             results['lidar_bev_feat'] = self.extract_lidar_bev_feat(points, img, img_metas)
 
@@ -432,17 +436,17 @@ class FBOCC(CenterPoint):
         results= self.extract_feat(
             points, img=img_inputs, img_metas=img_metas, **kwargs)
         losses = dict()
-
-        if  self.with_pts_bbox:
-            losses_pts = self.forward_pts_train(results['img_bev_feat'], gt_bboxes_3d,
-                                            gt_labels_3d, img_metas,
-                                            gt_bboxes_ignore)
-            losses.update(losses_pts)
-            
+        # breakpoint()
         if self.with_specific_component('occupancy_head'):
-            losses_occupancy = self.occupancy_head.forward_train(results['img_bev_feat'], results=results, gt_occupancy=kwargs['gt_occupancy'], gt_occupancy_flow=gt_occupancy_flow)
+            losses_occupancy, occ_res = self.occupancy_head.forward_train(results['img_bev_feat'], results=results, gt_occupancy=kwargs['gt_occupancy'], gt_occupancy_flow=gt_occupancy_flow)
             losses.update(losses_occupancy)
 
+        if  self.bevdet_head is not None:
+            bbox_pts = self.bevdet_head(occ_res['out_voxel_feats'], img_metas)
+            bbox_loss_inputs = [gt_bboxes_3d, gt_labels_3d, bbox_pts]
+            bbox_losses = self.bevdet_head.loss(*bbox_loss_inputs)
+            losses.update(bbox_losses)
+            
         if self.with_specific_component('frpn'):
             losses_mask = self.frpn.get_bev_mask_loss(kwargs['gt_bev_mask'], results['bev_mask_logit'])
             losses.update(losses_mask)
@@ -520,18 +524,13 @@ class FBOCC(CenterPoint):
 
         bbox_list = [dict() for _ in range(len(img_metas))]
         
-        if  self.with_pts_bbox:
-            bbox_pts = self.simple_test_pts(results['img_bev_feat'], img_metas, rescale=rescale)
-        else:
-            bbox_pts = [None for _ in range(len(img_metas))]
-
-
         if self.with_specific_component('occupancy_head'):
-            pred_occupancy = self.occupancy_head(results['img_bev_feat'], results=results, **kwargs)['output_voxels'][0]
+            outputs = self.occupancy_head(results['img_bev_feat'], results=results, **kwargs)
+            pred_occupancy = outputs['output_voxels'][0] # torch.Size([1, 19, 200, 200, 16])
 
-            pred_occupancy = pred_occupancy.permute(0, 2, 3, 4, 1)[0]
+            pred_occupancy = pred_occupancy.permute(0, 2, 3, 4, 1)[0] # torch.Size([200, 200, 16, 19])
             if self.fix_void:
-                pred_occupancy = pred_occupancy[..., 1:]     
+                pred_occupancy = pred_occupancy[..., 1:] # torch.Size([200, 200, 16, 18])  
             pred_occupancy = pred_occupancy.softmax(-1)
 
 
@@ -559,19 +558,25 @@ class FBOCC(CenterPoint):
 
             # For test server
             if self.occupancy_save_path is not None:
-                    scene_name = img_metas[0]['scene_name']
-                    sample_token = img_metas[0]['sample_idx']
-                    # mask_camera = visible_mask[0][0]
-                    # masked_pred_occupancy = pred_occupancy[mask_camera].cpu().numpy()
-                    save_pred_occupancy = pred_occupancy.argmax(-1).cpu().numpy()
-                    save_path = os.path.join(self.occupancy_save_path, 'occupancy_pred', f'{sample_token}.npz')
-                    np.savez_compressed(save_path, save_pred_occupancy.astype(np.uint8)) 
+                scene_name = img_metas[0]['scene_name']
+                sample_token = img_metas[0]['sample_idx']
+                # mask_camera = visible_mask[0][0]
+                # masked_pred_occupancy = pred_occupancy[mask_camera].cpu().numpy()
+                save_pred_occupancy = pred_occupancy.argmax(-1).cpu().numpy()
+                save_path = os.path.join(self.occupancy_save_path, 'occupancy_pred', f'{sample_token}.npz')
+                np.savez_compressed(save_path, save_pred_occupancy.astype(np.uint8)) 
 
             pred_occupancy_category= pred_occupancy_category.cpu().numpy()
 
         else:
             pred_occupancy_category =  None
 
+        # predict 3D goals based on voxel feats
+        if  self.bevdet_head:
+            bbox_pts = self.simple_test_pts(outputs['out_voxel_feats'], img_metas, rescale=rescale)
+        else:
+            bbox_pts = [None for _ in range(len(img_metas))]
+        
         if results.get('bev_mask_logit', None) is not None:
             pred_bev_mask = results['bev_mask_logit'].sigmoid() > 0.5
             iou = IOU(pred_bev_mask.reshape(1, -1), kwargs['gt_bev_mask'][0].reshape(1, -1)).cpu().numpy()
@@ -597,3 +602,15 @@ class FBOCC(CenterPoint):
         assert self.with_pts_bbox
         outs = self.pts_bbox_head(results['img_bev_feat'])
         return outs
+    
+    def simple_test_pts(self, x, img_metas, rescale=False):
+        """Test function of point cloud branch."""
+        outs = self.bevdet_head(x, img_metas)
+        # breakpoint()
+        bbox_list = self.bevdet_head.get_bboxes(
+            outs, img_metas, rescale=rescale)
+        bbox_results = [
+            bbox3d2result(bboxes, scores, labels)
+            for bboxes, scores, labels in bbox_list
+        ]
+        return bbox_results

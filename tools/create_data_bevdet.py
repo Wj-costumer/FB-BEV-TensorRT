@@ -38,7 +38,7 @@ classes = [
     'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone'
 ]
 
-VERSION= 'v1.0-trainval'
+VERSION= 'v1.0-mini'
 NUSCENES = 'nuscenes'
 def get_gt(info):
     """Generate gt labels from info.

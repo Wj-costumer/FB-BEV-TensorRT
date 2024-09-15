@@ -91,12 +91,14 @@ grid_config_bevformer={
        }
 bev_h_ = 100
 bev_w_ = 100
+bev_h = 200
+bev_w = 200
 numC_Trans=80
 _dim_ = 256
 _pos_dim_ = 40
 _ffn_dim_ = numC_Trans * 4
 _num_levels_= 1
-
+voxel_size = [0.2, 0.2, 8]
 empty_idx = 18  # noise 0-->255
 num_cls = 19  # 0 others, 1-16 obj, 17 free
 fix_void = num_cls == 19
@@ -115,9 +117,11 @@ model = dict(
     do_history = do_history,
     history_cat_num=history_cat_num,
     single_bev_num_channels=numC_Trans,
+    with_pts_bbox=True,
     readd=True,
     img_backbone=dict(
-        pretrained='ckpts/resnet50-0676ba61.pth',
+        # pretrained='ckpts/resnet50-0676ba61.pth',
+        pretrained='ckpts/fbocc-r50-cbgs_depth_16f_16x4_20e.pth',
         type='ResNet',
         depth=50,
         num_stages=4,
@@ -247,13 +251,112 @@ model = dict(
             loss_voxel_lovasz_weight=1.0,
         ),
     ),
+    bevdet_head=dict(
+        type='BEVHead',
+        bev_h=bev_h,
+        bev_w=bev_w,
+        num_query=900,
+        num_classes=10,
+        in_channels=_dim_,
+        sync_cls_avg_factor=True,
+        with_box_refine=True,
+        as_two_stage=False,
+        transformer=dict(
+            type='BEVDetTransformer',
+            rotate_prev_bev=True,
+            use_shift=True,
+            use_can_bus=True,
+            embed_dims=_dim_,
+            encoder=dict(
+                type='BEVFormerEncoder',
+                num_layers=3,
+                pc_range=point_cloud_range,
+                num_points_in_pillar=4,
+                return_intermediate=False,
+                transformerlayers=dict(
+                    type='BEVFormerLayer',
+                    attn_cfgs=[
+                        dict(
+                            type='TemporalSelfAttention',
+                            embed_dims=_dim_,
+                            num_levels=1),
+                        dict(
+                            type='SpatialCrossAttention',
+                            pc_range=point_cloud_range,
+                            deformable_attention=dict(
+                                type='MSDeformableAttention3D',
+                                embed_dims=_dim_,
+                                num_points=8,
+                                num_levels=_num_levels_),
+                            embed_dims=_dim_,
+                        )
+                    ],
+                    feedforward_channels=_ffn_dim_,
+                    ffn_dropout=0.1,
+                    operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
+                                     'ffn', 'norm'))),
+            decoder=dict(
+                type='DetectionTransformerDecoder',
+                num_layers=6,
+                return_intermediate=True,
+                transformerlayers=dict(
+                    type='DetrTransformerDecoderLayer',
+                    attn_cfgs=[
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=_dim_,
+                            num_heads=8,
+                            dropout=0.1),
+                         dict(
+                            type='CustomMSDeformableAttention',
+                            embed_dims=_dim_,
+                            num_levels=1),
+                    ],
+
+                    feedforward_channels=_ffn_dim_,
+                    ffn_dropout=0.1,
+                    operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
+                                     'ffn', 'norm')))),
+        bbox_coder=dict(
+            type='NMSFreeCoder',
+            post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
+            pc_range=point_cloud_range,
+            max_num=300,
+            voxel_size=voxel_size,
+            num_classes=10),
+        positional_encoding=dict(
+            type='LearnedPositionalEncoding',
+            num_feats=_pos_dim_,
+            row_num_embed=bev_h,
+            col_num_embed=bev_w,
+            ),
+        loss_cls=dict(
+            type='FocalLoss',
+            use_sigmoid=True,
+            gamma=2.0,
+            alpha=0.25,
+            loss_weight=2.0),
+        loss_bbox=dict(type='L1Loss', loss_weight=0.25),
+        loss_iou=dict(type='GIoULoss', loss_weight=0.0),
+        train_cfg=dict(
+            grid_size=[512, 512, 1],
+            voxel_size=voxel_size,
+            point_cloud_range=point_cloud_range,
+            out_size_factor=4,
+            assigner=dict(
+                type='HungarianAssigner3D',
+                cls_cost=dict(type='FocalLossCost', weight=2.0),
+                reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
+                iou_cost=dict(type='IoUCost', weight=0.0), # Fake cost. This is just to make it compatible with DETR head.
+                pc_range=point_cloud_range)),
+    ),
     pts_bbox_head=None)
 
 # Data
 dataset_type = 'NuScenesDataset'
-data_root = 'data/nuscenes/'
+data_root = './data/nuscenes/'
 file_client_args = dict(backend='disk')
-occupancy_path = '/mount/data/occupancy_cvpr2023/gts'
+occupancy_path = './data/nuscenes/occ3d'
 
 
 train_pipeline = [
@@ -331,8 +434,8 @@ test_data_config = dict(
 
 data = dict(
     samples_per_gpu=samples_per_gpu,
-    workers_per_gpu=6,
-    test_dataloader=dict(runner_type='IterBasedRunnerEval'),
+    workers_per_gpu=16,
+    # test_dataloader=dict(runner_type='IterBasedRunnerEval'),
     train=dict(
         type=dataset_type,
         data_root=data_root,
@@ -390,5 +493,5 @@ custom_hooks = [
         temporal_start_iter=num_iters_per_epoch *2,
     ),
 ]
-load_from = 'ckpts/r50_256x705_depth_pretrain.pth'
+load_from = 'ckpts/fbocc-r50-cbgs_depth_16f_16x4_20e.pth'
 fp16 = dict(loss_scale='dynamic')

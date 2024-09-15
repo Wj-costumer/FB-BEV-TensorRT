@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-from .assigners import AssignResult, BaseAssigner, MaxIoUAssigner
+from .assigners import AssignResult, BaseAssigner, MaxIoUAssigner, HungarianAssigner3D
 from .coders import DeltaXYZWLHRBBoxCoder
+from .match_costs import BBox3DL1Cost
 # from .bbox_target import bbox_target
 from .iou_calculators import (AxisAlignedBboxOverlaps3D, BboxOverlaps3D,
                               BboxOverlapsNearest3D,
@@ -16,11 +17,12 @@ from .structures import (BaseInstance3DBoxes, Box3DMode, CameraInstance3DBoxes,
                          xywhr2xyxyr)
 from .transforms import bbox3d2result, bbox3d2roi, bbox3d_mapping_back
 from .util import *
+
 __all__ = [
-    'BaseSampler', 'AssignResult', 'BaseAssigner', 'MaxIoUAssigner',
+    'BaseSampler', 'AssignResult', 'BaseAssigner', 'MaxIoUAssigner', 'HungarianAssigner3D',
     'PseudoSampler', 'RandomSampler', 'InstanceBalancedPosSampler',
     'IoUBalancedNegSampler', 'CombinedSampler', 'SamplingResult',
-    'DeltaXYZWLHRBBoxCoder', 'BboxOverlapsNearest3D', 'BboxOverlaps3D',
+    'DeltaXYZWLHRBBoxCoder', 'BBox3DL1Cost', 'BboxOverlapsNearest3D', 'BboxOverlaps3D',
     'bbox_overlaps_nearest_3d', 'bbox_overlaps_3d',
     'AxisAlignedBboxOverlaps3D', 'axis_aligned_bbox_overlaps_3d', 'Box3DMode',
     'LiDARInstance3DBoxes', 'CameraInstance3DBoxes', 'bbox3d2roi',

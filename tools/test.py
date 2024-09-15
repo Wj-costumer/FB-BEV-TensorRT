@@ -258,6 +258,7 @@ def main():
         # segmentation dataset has `PALETTE` attribute
         model.PALETTE = dataset.PALETTE
 
+    breakpoint()
     if not distributed:
         model = MMDataParallel(model, device_ids=cfg.gpu_ids)
         outputs = single_gpu_test(model, data_loader, args.show, args.show_dir)
@@ -277,7 +278,7 @@ def main():
 
     rank, _ = get_dist_info()
 
-    
+    breakpoint()
     if rank == 0:
         if args.out:
             print(f'\nwriting results to {args.out}')

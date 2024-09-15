@@ -38,7 +38,9 @@ def single_gpu_test(model,
     for i, data in enumerate(data_loader):
         with torch.no_grad():
             result = model(return_loss=False, rescale=True, **data)
-
+            assert len(result) == 1, breakpoint()
+            assert len(data) == 5
+            assert len(data['gt_occupancy']) == 1
         if show:
             # Visualize the results of MMDetection3D model
             # 'show_results' is MMdetection3D visualization API
@@ -85,6 +87,9 @@ def single_gpu_test(model,
         results.extend(result)
 
         batch_size = len(result)
+        assert batch_size == 1
+        if i == 79:
+            breakpoint()
         for _ in range(batch_size):
             prog_bar.update()
     return results
